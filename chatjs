@@ -1,0 +1,375 @@
+import React from "react";
+import Chatbot from "react-chatbot-kit";
+import "react-chatbot-kit/build/main.css";
+import ActionProvider from "../ActionProvider";
+import MessageParser from "../MessageParser";
+import config from "../config";
+import { useState } from "react";
+import { useEffect } from "react";
+import ActionItem from "./ActionItem";
+import Swal from "sweetalert2";
+import { useRef } from "react";
+import Preview from "./Preview";
+import "../css/Chat.css";
+import constants from "../common/serverConstants";
+
+export default function Chat() {
+  const [pageDataMap, setPageDataMap] = useState({});
+  const [currentPageNumber, setCurrentPageNumber] = useState(null);
+  const [messages, setMessages] = useState([]);
+
+  const validator = (input) => {
+    return input.trim().length > 3;
+  };
+  const chatStyle = {
+    position: "relative",
+    width: "100%",
+  };
+
+  const [actions, setActions] = useState([]);
+  console.log("printing the api url", constants.api_url);
+  const expressAppUrl = new URL(constants.api_url);
+
+  // const expressAppUrl = new URL(constants.api_url);
+  // const expressAppUrl = new URL(process.env.REACT_APP_EXPRESS_APP_URL);
+
+  useEffect(() => {
+    console.log("Component is mounting");
+    const userID = sessionStorage.getItem("userID");
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    // const wsUrl = `${protocol}//${expressAppUrl.hostname}?clientType=reactUI&userID=${userID}`;
+    // const socket = new WebSocket(wsUrl);
+
+    // const wsUrl = `${expressAppUrl.protocol === "https:" ? "wss:" : "ws:"}//${
+    //   expressAppUrl.hostname
+    // }:${expressAppUrl.port}?clientType=reactUI&userID=${userID}`;
+
+    //const wsUrl = `${protocol}//${expressAppUrl.hostname}?clientType=reactUI&userID=${userID}`;
+    const wsUrl = `${expressAppUrl.protocol === "https:" ? "wss:" : "ws:"}//${
+      expressAppUrl.hostname
+    }:${expressAppUrl.port}?clientType=reactUI&userID=${userID}`;
+    console.log("WebSocket URL:", wsUrl);
+    const socket = new WebSocket(wsUrl);
+
+    socket.onopen = () => {
+      console.log("Connected to WebSocket server :: ", wsUrl);
+    };
+
+    socket.onmessage = (event) => {
+      console.log("Received message:", event.data);
+      setMessages((prevMessages) => [...prevMessages, event.data]);
+    };
+
+    socket.onerror = (error) => {
+      console.error("WebSocket error:", error);
+    };
+    socket.onclose = (event) => {
+      console.log("WebSocket connection closed:", event.code, event.reason);
+    };
+
+    return () => {
+      socket.close();
+    };
+  }, [expressAppUrl]);
+
+  // for processing messages in queue
+  useEffect(() => {
+    if (messages.length === 0) return;
+
+    const processMessage = (data) => {
+      console.log("Processing message", data);
+      if (data instanceof Blob) {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const base64data = reader.result;
+          // localStorage.setItem(`Page${currentPageNumber}`,base64data);
+
+          const pageEntry = localStorage.getItem(`Page${currentPageNumber}`);
+          let pageData = pageEntry ? JSON.parse(pageEntry) : {};
+          pageData.image = base64data;
+          // localStorage.setItem(`Page${currentPageNumber}`,JSON.stringify(pageData));
+
+          console.log("getting image data for page number", currentPageNumber);
+          console.log(pageDataMap);
+          setPageDataMap((prevMap) => {
+            const newMap = { ...prevMap };
+            if (newMap[currentPageNumber]) {
+              newMap[currentPageNumber] = {
+                ...newMap[currentPageNumber],
+                image: base64data,
+              };
+            }
+            return newMap;
+          });
+        };
+        reader.readAsDataURL(data);
+        setMessages((currentMessages) => currentMessages.slice(1));
+      } else {
+        let message;
+        console.log("printing the message ", data);
+        try {
+          message = JSON.parse(data);
+          console.log("Printing type of message ", message.type);
+          if (message.type === "Buffer" && Array.isArray(message.data)) {
+            // Convert the serialized Buffer back to a string (assuming UTF-8 encoded text)
+            const stringData = new TextDecoder().decode(
+              new Uint8Array(message.data),
+            );
+            try {
+              // Attempt to parse the string back into JSON
+              const parsedMessage = JSON.parse(stringData);
+              console.log("Converted Buffer and parsed JSON:", parsedMessage);
+              message = parsedMessage;
+            } catch (e) {
+              console.error("Error parsing converted Buffer data as JSON:", e);
+              // Handle cases where the data is not JSON
+            }
+          }
+
+          // handling the parsed message now
+          console.log(message.type);
+          console.log(message);
+          switch (message.type) {
+            case "observation":
+              // Handle observation message
+              setActions((actions) => [...actions, data]);
+              break;
+            case "page_map_json":
+              // Handle page map JSON message
+              // Assuming you have a function or state to handle this
+              // handlePageMapJson(message);
+              console.log("in page map json case");
+              console.log("length:", message.data.map);
+              Object.entries(message.data.map).forEach(
+                ([pageNumber, pageEntry]) => {
+                  let vertices = [];
+                  const elementID = pageEntry[0][0];
+                  if (pageEntry.length === 1) {
+                    vertices = pageEntry[0][1];
+                  } else {
+                    for (let i = 0; i < pageEntry[0].length; i++) {
+                      vertices.push(pageEntry[i][1]);
+                    }
+                  }
+
+                  console.log(
+                    "----------------------------------------------------------------------------------",
+                  );
+                  console.log("demo array element", pageEntry);
+                  console.log("page number", pageNumber);
+                  console.log("element id", elementID);
+                  console.log("vertices", vertices);
+                  if (vertices != null) {
+                    localStorage.setItem(
+                      `Page${pageNumber}`,
+                      JSON.stringify({ vertices: vertices, image: -1 }),
+                    );
+                  }
+                  setPageDataMap((prevMap) => {
+                    const newMap = { ...prevMap };
+                    newMap[pageNumber] = {
+                      ...newMap[pageNumber],
+                      vertices: vertices,
+                    };
+                    return newMap;
+                  });
+                },
+              );
+
+              // Object.entries(message.data.map).forEach(([pageNumber,[element_id,vertices]])=>{
+              //   console.log("inside map printing page number",pageNumber,vertices);
+              //   if(vertices!=null){
+              //     localStorage.setItem(`Page${pageNumber}`,JSON.stringify({vertices:vertices,image:-1}));
+              //   }
+              // })
+              // setPageDataMap((prevMap) => {
+              //   console.log("Page Data Map: ",pageDataMap);
+              //   const newMap = { ...prevMap };
+              //   Object.entries(message.data.map).forEach(
+              //     ([pageNumber, [_, vertices]]) => {
+              //       if (vertices != null) {
+              //         localStorage.setItem(`Page${pageNumber}`,JSON.stringify({vertices,image: -1}));
+              //         newMap[pageNumber] = {
+              //           ...newMap[pageNumber],
+              //           vertices: vertices,
+              //         };
+              //       }
+              //     }
+              //   );
+
+              //   return newMap;
+              // });
+              console.log("Page Data Map: ", pageDataMap);
+              console.log("getting pages and vertices");
+              break;
+            case "next_image_of_page":
+              // Handle next image of map message
+              // Assuming you have a function or state to handle this
+              // handleNextImageOfMap(message);
+              console.log("received page number as ", message.key);
+              if (message.key != null) {
+                setCurrentPageNumber(message.key);
+                console.log("Setting current page number to:", message.key);
+              } else {
+                console.error(
+                  "Received null or undefined page number in message",
+                );
+              }
+              break;
+            default:
+              console.log("Unknown message type");
+          }
+        } catch (e) {
+          console.error("Error parsing message data as JSON:", e);
+        }
+        setMessages((currentMessages) => currentMessages.slice(1));
+      }
+    };
+
+    const latestMessage = messages[0];
+    processMessage(latestMessage);
+  }, [messages, currentPageNumber]);
+
+  const actionItemsRef = useRef(null);
+
+  // const storedImageUrl = localStorage.getItem("storedImage");
+
+  useEffect(() => {
+    if (actionItemsRef.current) {
+      const { scrollHeight } = actionItemsRef.current;
+      actionItemsRef.current.scrollTop = scrollHeight;
+    }
+  }, [actions]);
+
+  return (
+    <div className="chatContainer" style={{ display: "flex", height: "85vh" }}>
+      <div className="chatLeftPanel">
+        <div
+          className="preview spark-panel spark-panel--card"
+          style={{
+            position: "relative",
+            top: "0",
+            overflowY: "scroll",
+            scrollbarWidth: "none",
+            msOverflowStyle: "none",
+            height: "82vh",
+          }}
+        >
+          {/*// col-lg-6 spark-mar-t-2">*/}
+          <div
+            className="previewDiv"
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              backgroundColor: "#e9e9e9",
+            }}
+          >
+            {/* <p id="live-heading">Live Preview</p> */}
+            <div style={{ width: "100%", textAlign: "center" }}>
+              <p id="live-heading">Live Preview</p>
+            </div>
+            <button
+              label="stop"
+              className="stopButton"
+              onClick={async () => {
+                console.log("Button clicked!");
+
+                const response = await fetch(`${expressAppUrl}stop`, {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                  },
+                  body: JSON.stringify({ terminateMessage: "terminate chain" }),
+                });
+                const data = await response.json();
+                console.log(data);
+              }}
+            >
+              STOP
+            </button>
+            {/* <h4 className="live-preview-heading">Live Preview</h4> */}
+          </div>
+          {/* {actions.map((actions, index) => (
+          <ActionItem actionNo={index + 1} />
+        ))} */}
+
+          <div className="actionItems" ref={actionItemsRef}>
+            {actions.map((action, index) => (
+              <ActionItem
+                actionNo={JSON.parse(action).data}
+                // action={JSON.parse(action).action}
+                // agent={JSON.parse(action).agent}
+                // desc={JSON.parse(action).description}
+                // key={index}
+                color={JSON.parse(action).color}
+              />
+            ))}
+            <br />
+          </div>
+
+          {pageDataMap && Object.keys(pageDataMap).length > 0 ? (
+            Object.entries(pageDataMap).map(
+              ([pageNumber, { vertices, image }]) => (
+                <React.Fragment key={pageNumber}>
+                  {console.log(vertices)}
+                  <Preview vertices={vertices} image={image} />
+                </React.Fragment>
+              ),
+            )
+          ) : (
+            <div></div>
+          )}
+        </div>
+
+        <div
+          className="feedback spark-panel spark-panel--card"
+          style={{ display: "none" }}
+        >
+          {/*//col-lg-6 spark-mar-t-2">*/}
+          <p>Were these actions helpful in answering your question?</p>
+          <div className="button-class">
+            <button
+              id="yesButton"
+              className="spark-icon-check-circle spark-icon--fill no-border"
+              style={{ fontFamily: "Roboto, sans-serif" }}
+              onClick={() => {
+                Swal.fire({
+                  title: "Success",
+                  text: "Feedback posted. Thank you!",
+                  icon: "success",
+                  showConfirmButton: false,
+                  timer: 1500,
+                  customClass: {
+                    popup: "custom-swal",
+                  },
+                });
+              }}
+            >
+              &nbsp;&nbsp;Yes
+            </button>
+
+            <span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span>
+            <button
+              className="spark-icon-close-circle spark-icon--fill no-border"
+              style={{ fontFamily: "Roboto, sans-serif" }}
+            >
+              &nbsp;&nbsp;No
+            </button>
+          </div>
+          <br></br>
+        </div>
+      </div>
+
+      <div className="chat spark-panel spark-panel--card">
+        {/*//col-lg-8 spark-mar-t-2">*/}
+        <Chatbot
+          config={config}
+          actionProvider={ActionProvider}
+          messageParser={MessageParser}
+          style={chatStyle}
+          validator={validator}
+        />
+      </div>
+    </div>
+  );
+}
